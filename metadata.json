@@ -1,0 +1,6 @@
+{
+  "name": "3D Bedroom Feng Shui AI Studio",
+  "description": "Interactive 3D bedroom arrangement studio with real-time Eight Mansions (Bát Trạch) Feng Shui analysis, procedural furniture models, and Gemini AI Master guidance.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

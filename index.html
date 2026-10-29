@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Feng Shui Studio — Trợ lý thiết kế phòng ngủ thông minh</title>
+    <meta name="description" content="AI Feng Shui Studio — Ứng dụng phân tích phong thủy phòng ngủ Bát Trạch kết hợp mô hình 3D thông minh và Trợ lý AI Interior Designer." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <meta property="og:title" content="AI Feng Shui Studio" />
+    <meta property="og:description" content="AI Feng Shui Studio — Ứng dụng phân tích phong thủy phòng ngủ Bát Trạch kết hợp mô hình 3D thông minh và Trợ lý AI Interior Designer." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <script>
+      window.addEventListener('error', function(e) {
+        console.error('CRITICAL JS ERROR:', e);
+        var el = document.getElementById('debug-error-box');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'debug-error-box';
+          el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;background:#dc2626;color:#ffffff;padding:20px;font-family:sans-serif;font-size:14px;box-shadow:0 10px 25px rgba(0,0,0,0.5);white-space:pre-wrap;';
+          document.body.appendChild(el);
+        }
+        el.textContent = '❌ Lỗi JavaScript: ' + (e.message || (e.error && e.error.message) || e) + '\nFile: ' + (e.filename || '') + ' (dòng ' + (e.lineno || '') + ')';
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        console.error('CRITICAL PROMISE REJECTION:', e);
+        var el = document.getElementById('debug-error-box');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'debug-error-box';
+          el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;background:#dc2626;color:#ffffff;padding:20px;font-family:sans-serif;font-size:14px;box-shadow:0 10px 25px rgba(0,0,0,0.5);white-space:pre-wrap;';
+          document.body.appendChild(el);
+        }
+        el.textContent = '❌ Lỗi Promise: ' + ((e.reason && e.reason.message) || e.reason);
+      });
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
