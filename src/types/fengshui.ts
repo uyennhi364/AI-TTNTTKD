@@ -115,7 +115,7 @@ export interface ProposedAdjustment {
 }
 
 export interface AIActionCommand {
-  type: 'add_object' | 'move_object' | 'rotate_object' | 'delete_object' | 'optimize_room' | 'select_object';
+  type: 'add_object' | 'move_object' | 'rotate_object' | 'delete_object' | 'optimize_room' | 'select_object' | 'undo_action';
   objectType?: RoomObjectType;
   objectId?: string;
   name?: string;

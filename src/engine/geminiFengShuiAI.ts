@@ -8,6 +8,7 @@ import {
   UserFengShuiProfile,
 } from '../types/fengshui';
 import { getFloorDistance } from './fengshuiRules';
+import { generateOptimizedLayout } from './layoutOptimizer';
 import { parseIntent, buildSceneState } from './sceneIntentParser';
 import { executeSceneCommand } from './sceneCommandExecutor';
 import {
@@ -24,6 +25,7 @@ export interface FengShuiConsultationResult {
   actions?: AIActionCommand[];
   proposal?: LayoutOptimizationProposal | null;
   proposedAdjustment?: ProposedAdjustment | null;
+  isGeminiOnline?: boolean;
 }
 
 export interface DetailedObjectEvidence {
@@ -58,9 +60,15 @@ export interface DeepFengShuiReportData {
   recommendedAction: string;
 }
 
+export interface ChatHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 /**
  * Natural language intent parser & 3D Feng Shui Interior Designer.
  * Understands 3D room state, user Kua, furniture geometry, and generates safe structured actions.
+ * Supports full multi-turn conversation history for contextual memory.
  */
 export async function generateFengShuiConsultation(
   prompt: string,
@@ -68,31 +76,51 @@ export async function generateFengShuiConsultation(
   roomConfig: RoomConfig,
   objects: RoomObject[],
   evaluation: FengShuiRoomEvaluation,
-  selectedObjectId: string | null
+  selectedObjectId: string | null,
+  chatHistory?: ChatHistoryMessage[]
 ): Promise<FengShuiConsultationResult> {
-  // 1. Try sending real-time 3D context to server endpoint
+  // 1. Try sending real-time 3D context to server endpoint with full chat history
   try {
+    // Build full conversation history ending with the current user message
+    const historyMessages = (chatHistory || []).map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      content: m.content,
+    }));
+    const messages = [
+      ...historyMessages,
+      { role: 'user', content: prompt },
+    ];
+
+    const localApiKey = typeof window !== 'undefined' ? (localStorage.getItem('gemini_api_key') || '').trim() : '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (localApiKey) {
+      headers['x-gemini-api-key'] = localApiKey;
+    }
+
     const res = await fetch('/api/gemini/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
-        messages: [{ role: 'user', content: prompt }],
+        messages,
         userProfile,
         roomConfig,
         objects,
         ruleEngineResult: evaluation,
         selectedObjectId,
+        apiKey: localApiKey || undefined,
       }),
     });
 
     if (res.ok) {
       const data = await res.json();
-      if (data && data.success && data.data) {
+      // Server returns { success, reply, aiActions, proposedAdjustment, optimizationProposal, isGeminiOnline }
+      if (data && data.success) {
         return {
-          replyText: data.data.reply || data.data.replyText || 'Đã phân tích căn phòng.',
-          actions: data.data.aiActions?.actions || data.data.actions,
-          proposal: data.data.proposal || data.data.optimizationProposal,
-          proposedAdjustment: data.data.proposedAdjustment,
+          replyText: data.reply || data.replyText || 'Đã phân tích căn phòng.',
+          actions: data.aiActions?.actions || data.actions,
+          proposal: data.optimizationProposal || data.proposal,
+          proposedAdjustment: data.proposedAdjustment,
+          isGeminiOnline: Boolean(data.isGeminiOnline),
         };
       }
     }
@@ -101,7 +129,24 @@ export async function generateFengShuiConsultation(
   }
 
   // 2. High-Intelligence Local AI Designer Fallback
-  // Build scene state snapshot and delegate to new intent parser
+  const lowerPrompt = prompt.toLowerCase();
+  if (lowerPrompt.includes('tối ưu') || lowerPrompt.includes('optimize') || lowerPrompt.includes('sắp xếp lại')) {
+    const { proposal } = generateOptimizedLayout(userProfile, roomConfig, objects, evaluation);
+    return {
+      replyText: `Tôi đã phân tích toàn bộ bố cục phòng ${roomConfig.width}m × ${roomConfig.length}m của gia chủ mệnh ${userProfile.guaName} (${userProfile.element}) và tạo phương án tối ưu nâng điểm phong thủy từ ${proposal.beforeScore} lên ${proposal.afterScore}/100.\n\nCác cải tiến:\n${proposal.improvements.map((imp, i) => `${i + 1}. ${imp}`).join('\n')}\n\nBạn có thể bấm Xem trước để kiểm tra bóng mờ 3D hoặc Áp dụng ngay!`,
+      proposal,
+      proposedAdjustment: proposal.adjustments[0] || null,
+      actions: [
+        {
+          type: 'optimize_room',
+          description: 'Tối ưu toàn bộ bố cục phòng ngủ theo Bát Trạch',
+          adjustments: proposal.adjustments,
+        },
+      ],
+    };
+  }
+
+  // Build scene state snapshot and delegate to intent parser
   const sceneState = buildSceneState(roomConfig, objects);
   const intentResult: AIIntentResult = parseIntent(prompt, sceneState, userProfile, evaluation, selectedObjectId);
 

@@ -236,6 +236,36 @@ export function parseIntent(
   const objects = sceneState.objects;
 
   // -------------------------------------------------------------------------
+  // INTENT: LIST / SHOW OBJECTS & ROOM INFO
+  // -------------------------------------------------------------------------
+  const isListIntent =
+    p.includes('hiển thị') || p.includes('liệt kê') || p.includes('danh sách') ||
+    p.includes('có gì') || p.includes('có những gì') || p.includes('cho biết') ||
+    (p.includes('đồ vật') && (p.includes('trong phòng') || p.includes('hiện có') || p.includes('hiện tại') || p.includes('tất cả'))) ||
+    p.includes('bao nhiêu đồ') || p.includes('những đồ');
+
+  if (isListIntent) {
+    if (objects.length === 0) {
+      return {
+        replyText: 'Hiện tại phòng ngủ của bạn chưa có đồ vật nào. Bạn có thể dùng thư viện nội thất ở dock phía dưới để thêm giường, bàn, gương...',
+        commands: [],
+        requiresPreview: false,
+        requiresClarification: false,
+      };
+    }
+    const objectList = objects.map((o, i) => {
+      return `${i + 1}. **${o.name}** (${o.type})\n   • Vị trí: X=${o.position.x.toFixed(2)}m, Z=${o.position.z.toFixed(2)}m\n   • Kích thước: ${o.dimensions.width}m × ${o.dimensions.length}m × ${o.dimensions.height}m\n   • Góc xoay: ${o.rotation.y}°`;
+    }).join('\n\n');
+
+    return {
+      replyText: `Phòng ngủ hiện có **${objects.length} đồ vật**:\n\n${objectList}\n\nĐiểm phong thủy Bát Trạch: **${evaluation.overallScore}/100** (${evaluation.statusText}).`,
+      commands: [],
+      requiresPreview: false,
+      requiresClarification: false,
+    };
+  }
+
+  // -------------------------------------------------------------------------
   // INTENT: DELETE
   // -------------------------------------------------------------------------
   const isDeleteIntent =

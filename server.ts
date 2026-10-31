@@ -3,29 +3,34 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-
-dotenv.config();
+import { generateOptimizedLayout } from './src/engine/layoutOptimizer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Load both .env.local (preferred by AI Studio / Vite) and .env
+dotenv.config({ path: path.resolve(__dirname, '.env.local') });
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
-// Determine if a real Gemini API Key is available
-const hasApiKey = Boolean(
-  process.env.GEMINI_API_KEY &&
-  process.env.GEMINI_API_KEY.trim() !== '' &&
-  !process.env.GEMINI_API_KEY.includes('MY_GEMINI_API_KEY')
-);
-
-let ai: GoogleGenAI | null = null;
-if (hasApiKey) {
+/**
+ * Helper to obtain an active GoogleGenAI client from either:
+ * 1. Request header 'x-gemini-api-key' or body 'apiKey' (configured from UI)
+ * 2. Server environment GEMINI_API_KEY (.env.local or .env)
+ */
+function getGenAIClient(customKey?: string): GoogleGenAI | null {
+  const key = (customKey || process.env.GEMINI_API_KEY || '').trim();
+  if (!key || key.includes('MY_GEMINI_API_KEY')) {
+    return null;
+  }
   try {
-    ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
+    return new GoogleGenAI({
+      apiKey: key,
       httpOptions: {
         headers: {
           'User-Agent': 'aistudio-build',
@@ -33,21 +38,45 @@ if (hasApiKey) {
       },
     });
   } catch (err) {
-    console.warn('Could not initialize GoogleGenAI with key, switching to offline fallback mode:', err);
+    console.warn('Could not initialize GoogleGenAI with key:', err);
+    return null;
   }
 }
 
-const FENG_SHUI_SYSTEM_PROMPT = `Bạn là Thầy Phong Thủy Bát Trạch & Kiến trúc sư nội thất cao cấp (AI Feng Shui Master Consultant).
-Vai trò của bạn là phân tích chi tiết, sâu sắc và khoa học cách bố trí phòng ngủ dựa trên Bát Trạch Minh Cảnh kết hợp công năng kiến trúc hiện đại.
+const FENG_SHUI_SYSTEM_PROMPT = `Bạn là một AI Assistant duy nhất, đa năng, chuyên nghiệp và thân thiện. Bạn giao tiếp trực tiếp với người dùng bằng tiếng Việt tự nhiên (trừ khi người dùng yêu cầu ngôn ngữ khác).
 
-QUY TẮC CỐT LÕI:
-1. Luôn sử dụng ngôn phong chuyên gia phong thủy uy tín: điềm đạm, ân cần, thấu đáo, giải thích cội nguồn năng lượng (Tụ khí, Tán khí, Khí trường, Ngũ hành tương sinh tương khắc, Bát quái phương vị).
-2. Tuyệt đối không chỉ đưa ra phán đoán chung chung (như "Gương xấu"). Luôn giải thích:
-   - Nguyên nhân phong thủy & tâm lý/kiến trúc thực tế.
-   - Hậu quả nếu không điều chỉnh (ảnh hưởng giấc ngủ, cảm giác bất an, tài vận hao hụt).
-   - Biện pháp hóa giải hoặc đề xuất vị trí thay thế tối ưu (dịch bao nhiêu cm, xoay hướng nào, che chắn bằng vật phẩm phong thủy ra sao).
-3. Khi đề xuất thay đổi bố trí, cung cấp gợi ý tọa độ/hướng cụ thể để người dùng có thể Xem trước và Áp dụng trực tiếp vào mô hình 3D.
-4. Trả lời bằng tiếng Việt chuẩn xác, trang trọng nhưng dễ hiểu.`;
+MỤC TIÊU:
+Bạn vừa là trợ lý kiến thức tổng quát, vừa là chuyên gia tư vấn phong thủy Bát Trạch, kiến trúc sư nội thất và trợ lý điều khiển phòng ngủ 3D. Không được giới hạn mọi câu hỏi vào chủ đề phòng ngủ.
+
+PHÂN LOẠI VÀ XỬ LÝ YÊU CẦU:
+1. Câu hỏi kiến thức tổng quát, công nghệ, học tập, đời sống hoặc chủ đề bên ngoài: trả lời trực tiếp như một trợ lý AI tổng quát. Không từ chối chỉ vì câu hỏi không liên quan đến phòng ngủ.
+2. Câu hỏi phong thủy: giải thích rõ nguyên tắc, giả định và mức độ chắc chắn. Phân biệt quan niệm phong thủy truyền thống với kiến thức khoa học đã được kiểm chứng; không khẳng định phong thủy có thể bảo đảm sức khỏe, tài lộc hay kết quả tương lai.
+3. Câu hỏi thiết kế nội thất: cân nhắc kích thước, công năng, lối đi, ánh sáng, thông gió, thẩm mỹ và thông tin thực tế của căn phòng.
+4. Câu hỏi về căn phòng hiện tại: ưu tiên dùng dữ liệu BỐI CẢNH PHÒNG được cung cấp. Không tự bịa đồ vật, kích thước, tọa độ, hướng cửa hoặc kết quả đánh giá.
+5. Yêu cầu thay đổi mô hình 3D: chỉ tạo hành động khi xác định được đối tượng và ý định đủ rõ. Nếu thiếu thông tin hoặc có nhiều đồ vật cùng loại, hãy hỏi lại thay vì tự chọn ngẫu nhiên.
+6. Yêu cầu tối ưu toàn bộ căn phòng: không tự khẳng định đã tối ưu hoặc đã di chuyển đồ vật nếu chưa có kết quả từ bộ máy bố trí và thực thi. Hãy đề xuất phương án hoặc trả về yêu cầu có cấu trúc để hệ thống kiểm tra.
+
+QUY TẮC HỘI THOẠI:
+- Duy trì ngữ cảnh các lượt hội thoại được gửi trong request; không tuyên bố nhớ các cuộc trò chuyện không được cung cấp.
+- Trả lời đúng trọng tâm, có giải thích và ví dụ khi hữu ích.
+- Nếu không biết hoặc thiếu dữ liệu, nói rõ điều đó và hỏi tối đa một câu làm rõ quan trọng nhất.
+- Không bịa nguồn, số liệu, kết quả phân tích hoặc khả năng đã thực hiện hành động.
+- Với chủ đề có rủi ro cao (y tế, pháp lý, tài chính), cung cấp thông tin tổng quát thận trọng và khuyến nghị chuyên gia phù hợp.
+
+ĐỊNH DẠNG HÀNH ĐỘNG 3D:
+Chỉ khi người dùng thực sự yêu cầu thao tác 3D, thêm khối [AI_ACTIONS] ở cuối câu trả lời. JSON phải hợp lệ. Các loại action được phép:
+- add_object: cần objectType, name; dimensions và position nếu đã biết chắc.
+- move_object: cần objectId và position.
+- rotate_object: cần objectId và rotationY hoặc rotationDelta.
+- delete_object: cần objectId.
+- optimize_room: chỉ dùng như ý định yêu cầu bộ tối ưu bố cục, không tự bịa danh sách tọa độ.
+
+Cấu trúc ví dụ (chỉ đưa các trường thực sự biết):
+[AI_ACTIONS]
+{"actions":[{"type":"move_object","objectId":"id_do_vat","position":{"x":-1.2,"z":1.0},"description":"Di chuyển đồ vật"}]}
+[/AI_ACTIONS]
+
+Không đưa [AI_ACTIONS] cho câu hỏi thông tin hoặc tư vấn thông thường. Không tuyên bố hành động đã hoàn tất; backend và bộ máy 3D mới là nơi xác nhận thực thi.`;
 
 /**
  * Intelligent Offline Feng Shui Analysis Generator (Local AI Rule Engine)
@@ -121,89 +150,84 @@ function generateLocalFengShuiAnalysis(userProfile: any, roomConfig: any, object
 
 /**
  * Intelligent Offline Conversational AI (Natural Language Command Parser + Layout Optimizer)
+ * Handles any free-form question about the room or feng shui when Gemini API is unavailable.
  */
 function handleLocalAIChat(userText: string, userProfile: any, roomConfig: any, objects: any[], ruleEngineResult: any, selectedObjectId: string | null) {
   const lower = userText.toLowerCase().trim();
   const halfW = roomConfig.width / 2;
   const halfL = roomConfig.length / 2;
 
+  // 0. "Hiển thị / Liệt kê / Cho biết / Có những gì" — list room objects
+  if (
+    lower.includes('hiển thị') || lower.includes('liệt kê') || lower.includes('có gì') ||
+    lower.includes('có những gì') || lower.includes('danh sách') || lower.includes('cho biết') ||
+    (lower.includes('đồ vật') && (lower.includes('trong phòng') || lower.includes('hiện có') || lower.includes('hiện tại'))) ||
+    lower.includes('có bao nhiêu') || lower.includes('những đồ') || lower.includes('trong phòng có')
+  ) {
+    if (objects.length === 0) {
+      return { reply: 'Hiện tại phòng ngủ của bạn chưa có đồ vật nào. Bạn có thể dùng thư viện nội thất ở phía dưới để thêm giường, bàn, gương...' };
+    }
+    const objectList = objects.map((o: any, i: number) => {
+      const rot = Math.round((o.rotation.y * 180) / Math.PI);
+      return `${i + 1}. **${o.name}** (${o.type})\n   • Vị trí: X=${o.position.x.toFixed(2)}m, Z=${o.position.z.toFixed(2)}m\n   • Kích thước: ${o.dimensions.width}m × ${o.dimensions.length}m × ${o.dimensions.height}m\n   • Góc xoay: ${rot}°`;
+    }).join('\n\n');
+    return {
+      reply: `Phòng ngủ hiện tại có **${objects.length} đồ vật**:\n\n${objectList}\n\nĐiểm phong thủy tổng thể: **${ruleEngineResult.overallScore}/100** (${ruleEngineResult.statusText}).`,
+    };
+  }
+
+  // 0b. "Điểm phong thủy / Đánh giá"
+  if (
+    lower.includes('điểm phong thủy') || lower.includes('bao nhiêu điểm') ||
+    lower.includes('đánh giá phòng') || lower.includes('tổng điểm') || lower.includes('điểm số')
+  ) {
+    const issues = ruleEngineResult.keyIssues || [];
+    return {
+      reply: `**Điểm phong thủy hiện tại: ${ruleEngineResult.overallScore}/100** — ${ruleEngineResult.statusText}.\n\n${issues.length > 0 ? `**Các vấn đề phát hiện:**\n${issues.map((is: string, i: number) => `${i + 1}. ${is}`).join('\n')}` : 'Không có xung sát nghiêm trọng.'}\n\nBạn có muốn tôi **tối ưu tự động** để nâng điểm không?`,
+    };
+  }
+
+  // 0c. "Thông tin gia chủ / Quái mệnh"
+  if (
+    lower.includes('quái mệnh') || lower.includes('bản mệnh') || lower.includes('thông tin gia chủ') ||
+    lower.includes('sinh năm') || lower.includes('mệnh của tôi') || lower.includes('hướng tốt') || lower.includes('hướng xấu')
+  ) {
+    return {
+      reply: `**Thông tin gia chủ:**\n• Năm sinh: ${userProfile.birthYear} (${userProfile.gender === 'male' ? 'Nam' : 'Nữ'})\n• Quái mệnh: **${userProfile.guaName}** — Ngũ hành: **${userProfile.element}**\n• Nhóm: ${userProfile.group}\n\n**Hướng cát (tốt):** ${userProfile.auspiciousDirections?.join(', ') || 'N/A'}\n**Hướng hung (xấu):** ${userProfile.inauspiciousDirections?.join(', ') || 'N/A'}\n\nĐầu giường và bàn làm việc nên hướng về các hướng cát để tối ưu vượng khí.`,
+    };
+  }
+
   // 1. Command: "Tối ưu phòng" / "Tối ưu giúp tôi" / "Tối ưu"
   if (lower.includes('tối ưu') || lower.includes('optimize') || lower.includes('sắp xếp lại')) {
-    const bed = objects.find((o) => o.type === 'bed');
-    const mirror = objects.find((o) => o.type === 'mirror');
-    const desk = objects.find((o) => o.type === 'desk');
+    const { proposal, optimizedObjects } = generateOptimizedLayout(
+      userProfile,
+      roomConfig,
+      objects,
+      ruleEngineResult
+    );
 
-    const adjustments: any[] = [];
-    const improvements: string[] = [];
+    const improvementList = proposal.improvements.map((imp: string, i: number) => `${i + 1}. ${imp}`).join('\n');
+    const replyText = `Tôi đã sử dụng Layout Optimization Engine để phân tích toàn bộ ${objects.length} đồ vật trong phòng ${roomConfig.width}m × ${roomConfig.length}m của gia chủ mệnh ${userProfile.guaName} (${userProfile.element} - ${userProfile.group}).
 
-    if (bed) {
-      // Move bed to safe wall position
-      adjustments.push({
-        objectId: bed.id,
-        suggestedX: Math.round((-halfW + 1.2) * 10) / 10,
-        suggestedZ: Math.round((-halfL + 1.3) * 10) / 10,
-        suggestedRotationY: 0,
-        reason: 'Đầu giường tựa sát tường Bắc kiên cố, đón vượng khí cung Sinh Khí cát lợi',
-        estimatedScore: 92,
-      });
-      improvements.push('Kê đầu giường tựa tường kiên cố, tránh xa cửa đâm');
-    }
+Đề xuất phương án tối ưu hình học & phong thủy:
+• Điểm phong thủy: nâng từ **${proposal.beforeScore}** lên **${proposal.afterScore}/100**
+${improvementList ? `\nCác cải tiến chính:\n${improvementList}` : ''}
 
-    if (mirror) {
-      // Rotate mirror away from bed
-      adjustments.push({
-        objectId: mirror.id,
-        suggestedX: Math.round((halfW - 0.5) * 10) / 10,
-        suggestedZ: Math.round((halfL - 1.2) * 10) / 10,
-        suggestedRotationY: Math.PI / 2,
-        reason: 'Xoay gương sang diện tường hông, triệt tiêu quang sát chiếu thẳng giường',
-        estimatedScore: 92,
-      });
-      improvements.push('Xoay gương lệch khỏi phương vị giường ngủ');
-    }
-
-    if (desk) {
-      adjustments.push({
-        objectId: desk.id,
-        suggestedX: Math.round((halfW - 1.0) * 10) / 10,
-        suggestedZ: Math.round((-halfL + 1.0) * 10) / 10,
-        suggestedRotationY: Math.PI,
-        reason: 'Bàn học tựa lưng vào tường, tầm nhìn mở rộng bao quát cửa phòng',
-        estimatedScore: 92,
-      });
-      improvements.push('Bàn học đạt thế "Tọa sơn quan thủy" minh mẫn trí tuệ');
-    }
-
-    const proposal = {
-      id: `prop_${Date.now()}`,
-      title: 'Phương án Tối ưu Toàn diện Bát Trạch',
-      beforeScore: ruleEngineResult.overallScore,
-      afterScore: 92,
-      keyIssues: ruleEngineResult.keyIssues || ['Gương chiếu giường', 'Giường chưa tựa tường vững'],
-      improvements,
-      adjustments,
-    };
+Bạn có thể bấm **Xem trước** để xem bóng mờ 3D hoặc bấm **Áp dụng** để cập nhật toàn bộ vị trí mới!`;
 
     return {
-      reply: `Tôi đã phân tích toàn bộ bố cục phòng ${roomConfig.width}m × ${roomConfig.length}m của gia chủ mệnh ${userProfile.guaName} ${userProfile.element}.
-
-Tôi đề xuất phương án cải tạo nâng điểm phong thủy từ ${ruleEngineResult.overallScore} lên 92/100:
-1. Đưa đầu giường tựa sát tường vững chãi, nạp sinh khí an lành.
-2. Xoay gương lệch khỏi hướng giường ngủ để triệt tiêu quang sát.
-3. Bàn học kê vị trí đón ánh sáng, lưng có điểm tựa vững chãi.
-
-Bạn có thể bấm **Xem vị trí** để xem trước dạng 3D hoặc **Áp dụng** để cập nhật ngay!`,
+      reply: replyText,
       aiActions: {
         actions: [
           {
             type: 'optimize_room',
             description: 'Tối ưu toàn bộ bố cục phòng ngủ',
-            adjustments: adjustments,
+            adjustments: proposal.adjustments,
           },
         ],
         optimizationProposal: proposal,
       },
-      proposedAdjustment: adjustments[0] || null,
+      proposedAdjustment: proposal.adjustments[0] || null,
       optimizationProposal: proposal,
     };
   }
@@ -375,24 +399,116 @@ Bạn có thể bấm **Xem vị trí** để xem trước dạng 3D hoặc **Á
     }
   }
 
-  // 6. Generic Feng Shui Inquiry
+  // 6. Generic reply with context — more informative offline response
+  const objectNames = objects.map((o: any) => o.name).join(', ') || 'chưa có đồ vật';
+  const issues = ruleEngineResult.keyIssues || [];
   return {
-    reply: `Chào gia chủ mệnh ${userProfile.guaName} (${userProfile.element} - ${userProfile.group}). Với cách bố trí phòng hiện tại (${roomConfig.width}m × ${roomConfig.length}m, hướng ${roomConfig.direction}), điểm phong thủy đạt ${ruleEngineResult.overallScore}/100.
-
-Bạn có thể yêu cầu tôi thực hiện trực tiếp:
-• "Tối ưu giúp tôi" — Tự động xếp lại layout đạt điểm cao nhất
-• "Thêm bàn học ở góc trái"
-• "Xoay giường 90 độ"
-• "Gương này có ảnh hưởng gì không?"`,
+    reply: `Chào gia chủ mệnh ${userProfile.guaName} (${userProfile.element} — ${userProfile.group}).\n\nPhòng ngủ ${roomConfig.width}m × ${roomConfig.length}m, hướng ${roomConfig.direction} hiện có: ${objectNames}.\nĐiểm phong thủy: ${ruleEngineResult.overallScore}/100 — ${ruleEngineResult.statusText}.${issues.length > 0 ? `\nVấn đề phát hiện: ${issues[0]}` : ''}\n\nTôi có thể giúp bạn:\n• "Hiển thị đồ vật trong phòng" — xem danh sách chi tiết\n• "Tối ưu giúp tôi" — AI tự xếp layout đạt điểm cao nhất\n• "Thêm bàn học ở góc trái" — thêm đồ vật\n• "Xoay giường 90 độ" — xoay đồ vật\n• "Điểm phong thủy là bao nhiêu?" — xem đánh giá\n\n(Hãy kết nối GEMINI_API_KEY để tôi có thể trả lời bất kỳ câu hỏi tự do nào!)`,
   };
 }
+
+const GEMINI_TOOLS = [
+  {
+    functionDeclarations: [
+      {
+        name: 'move_furniture',
+        description: 'Di chuyển một đồ vật trong phòng ngủ 3D tới tọa độ cụ thể hoặc vị trí an toàn.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            objectId: { type: 'STRING', description: 'ID của đồ vật cần di chuyển (ví dụ: bed_01, desk_window, wardrobe_north...)' },
+            targetX: { type: 'NUMBER', description: 'Tọa độ trục X (mét), từ -rộng/2 đến +rộng/2' },
+            targetZ: { type: 'NUMBER', description: 'Tọa độ trục Z (mét), từ -dài/2 đến +dài/2' },
+            reason: { type: 'STRING', description: 'Giải thích lý do kiến trúc / phong thủy của vị trí mới' },
+          },
+          required: ['objectId'],
+        },
+      },
+      {
+        name: 'rotate_furniture',
+        description: 'Xoay một đồ vật trong phòng ngủ 3D quanh trục đứng Y.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            objectId: { type: 'STRING', description: 'ID của đồ vật cần xoay' },
+            angleDegrees: { type: 'NUMBER', description: 'Góc xoay theo độ (ví dụ 90, 180, 270...)' },
+            reason: { type: 'STRING', description: 'Lý do xoay đồ vật' },
+          },
+          required: ['objectId'],
+        },
+      },
+      {
+        name: 'add_furniture',
+        description: 'Thêm một đồ vật nội thất mới vào phòng ngủ 3D.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            objectType: {
+              type: 'STRING',
+              description: 'Loại đồ vật: bed, desk, chair, wardrobe, mirror, plant, nightstand, sofa, table, tv, bookshelf, lamp, rug',
+            },
+            name: { type: 'STRING', description: 'Tên hiển thị tiếng Việt của đồ vật' },
+            targetX: { type: 'NUMBER', description: 'Tọa độ X tùy chọn' },
+            targetZ: { type: 'NUMBER', description: 'Tọa độ Z tùy chọn' },
+            reason: { type: 'STRING', description: 'Lý do thêm đồ vật vào không gian' },
+          },
+          required: ['objectType'],
+        },
+      },
+      {
+        name: 'delete_furniture',
+        description: 'Xóa một đồ vật ra khỏi phòng ngủ 3D.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            objectId: { type: 'STRING', description: 'ID của đồ vật cần xóa' },
+            reason: { type: 'STRING', description: 'Lý do xóa đồ vật' },
+          },
+          required: ['objectId'],
+        },
+      },
+      {
+        name: 'optimize_room_layout',
+        description: 'Kích hoạt Layout Optimization Engine để tự động sắp xếp lại toàn bộ nội thất trong phòng ngủ theo chuẩn phong thủy Bát Trạch và công năng kiến trúc.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            reason: { type: 'STRING', description: 'Lý do tối ưu phòng' },
+          },
+        },
+      },
+      {
+        name: 'undo_last_action',
+        description: 'Hoàn tác lại thao tác thay đổi phòng 3D vừa thực hiện khi người dùng muốn quay lại hoặc hủy thao tác.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            reason: { type: 'STRING', description: 'Lý do hoàn tác' },
+          },
+        },
+      },
+    ],
+  },
+];
+
+// API: Check Gemini AI Status
+app.get('/api/gemini/status', (req, res) => {
+  const customKey = req.headers['x-gemini-api-key'] as string | undefined;
+  const client = getGenAIClient(customKey);
+  res.json({
+    hasServerKey: Boolean(process.env.GEMINI_API_KEY && !process.env.GEMINI_API_KEY.includes('MY_GEMINI_API_KEY')),
+    isOnline: Boolean(client),
+  });
+});
 
 // API: Detailed Feng Shui Analysis
 app.post('/api/gemini/analyze', async (req, res) => {
   try {
-    const { userProfile, roomConfig, objects, ruleEngineResult } = req.body;
+    const { userProfile, roomConfig, objects, ruleEngineResult, apiKey } = req.body;
+    const customKey = (req.headers['x-gemini-api-key'] as string | undefined) || apiKey;
+    const aiClient = getGenAIClient(customKey);
 
-    if (ai) {
+    if (aiClient) {
       try {
         const prompt = `Phân tích toàn diện phong thủy phòng ngủ sau đây:
 
@@ -441,7 +557,7 @@ Trả về dưới định dạng JSON với cấu trúc:
   "recommendedAction": "Hành động ưu tiên số 1 người dùng nên làm ngay"
 }`;
 
-        const response = await ai.models.generateContent({
+        const response = await aiClient.models.generateContent({
           model: 'gemini-3.8-flash',
           contents: prompt,
           config: {
@@ -452,7 +568,7 @@ Trả về dưới định dạng JSON với cấu trúc:
         });
 
         const parsed = JSON.parse(response.text || '{}');
-        return res.json({ success: true, data: parsed });
+        return res.json({ success: true, data: parsed, isGeminiOnline: true });
       } catch (geminiError: any) {
         console.warn('Gemini cloud call failed, using intelligent local engine:', geminiError.message);
       }
@@ -460,7 +576,7 @@ Trả về dưới định dạng JSON với cấu trúc:
 
     // Fallback: Intelligent Local Analysis (Always works smoothly even without API key)
     const localReport = generateLocalFengShuiAnalysis(userProfile, roomConfig, objects, ruleEngineResult);
-    return res.json({ success: true, data: localReport });
+    return res.json({ success: true, data: localReport, isGeminiOnline: false });
   } catch (error: any) {
     console.error('Error during Feng Shui analysis:', error);
     res.status(500).json({
@@ -473,57 +589,56 @@ Trả về dưới định dạng JSON với cấu trúc:
 // API: Conversational Chat with Feng Shui Master
 app.post('/api/gemini/chat', async (req, res) => {
   try {
-    const { messages, userProfile, roomConfig, objects, ruleEngineResult, selectedObjectId } = req.body;
-    const latestUserMessage = messages[messages.length - 1]?.content || '';
-
-    if (ai) {
-      try {
-        const selectedObject = objects.find((o: any) => o.id === selectedObjectId);
-
-        const contextHeader = `BỐI CẢNH PHÒNG NGỦ 3D HIỆN TẠI:
-- Gia chủ: Sinh năm ${userProfile.birthYear} (${userProfile.gender === 'male' ? 'Nam' : 'Nữ'}), Quái ${userProfile.guaName} (${userProfile.element}), ${userProfile.group}.
-- Kích thước phòng: ${roomConfig.width}m (rộng trục X từ -${(roomConfig.width / 2).toFixed(1)} đến +${(roomConfig.width / 2).toFixed(1)}) x ${roomConfig.length}m (dài trục Z từ -${(roomConfig.length / 2).toFixed(1)} đến +${(roomConfig.length / 2).toFixed(1)}).
-- Hướng phòng: ${roomConfig.direction}.
-- Điểm phong thủy hiện tại: ${ruleEngineResult.overallScore}/100 (${ruleEngineResult.statusText}).
-- Đang chọn đồ vật: ${selectedObject ? `${selectedObject.name} (id: ${selectedObject.id}) tại [x=${selectedObject.position.x}, z=${selectedObject.position.z}], góc xoay: ${Math.round((selectedObject.rotation.y * 180) / Math.PI)}°` : 'Chưa chọn đồ vật nào'}.
-- Danh sách đồ vật hiện tại trong phòng:
-${objects.map((o: any) => `  * [id: "${o.id}"] ${o.name} (${o.type}): vị trí [x=${o.position.x.toFixed(1)}, z=${o.position.z.toFixed(1)}], kích thước [${o.dimensions.width}m x ${o.dimensions.length}m], góc xoay: ${Math.round((o.rotation.y * 180) / Math.PI)}°`).join('\n')}
-- Cảnh báo xung sát: ${ruleEngineResult.keyIssues.join('; ') || 'Không có xung sát nghiêm trọng'}.
-
-VAI TRÒ VÀ NĂNG LỰC ĐIỀU KHIỂN 3D:
-Bạn là Trợ lý AI Thiết kế Phòng ngủ 3D kiêm Chuyên gia Phong Thủy Bát Trạch.
-Khi có bất kỳ hành động điều chỉnh hoặc thêm mới hoặc tối ưu phòng 3D, hãy kèm theo khối JSON [AI_ACTIONS] ở CUỐI tin nhắn:
-[AI_ACTIONS]
-{
-  "actions": [
-    {
-      "type": "add_object" | "move_object" | "rotate_object" | "delete_object" | "optimize_room",
-      "objectId": "id_do_vat",
-      "objectType": "desk" | "wardrobe" | "bed" | "mirror" | "chair" | "plant" | "bookshelf" | "tv",
-      "name": "Tên đồ vật",
-      "dimensions": { "width": 1.4, "length": 0.7, "height": 0.75 },
-      "position": { "x": -1.2, "z": 1.0 },
-      "rotationY": 1.57,
-      "description": "Mô tả ngắn gọn"
+    const { messages, userProfile, roomConfig, objects, ruleEngineResult, selectedObjectId, apiKey } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0 || typeof messages[messages.length - 1]?.content !== 'string') {
+      return res.status(400).json({ success: false, error: 'Dữ liệu hội thoại không hợp lệ.' });
     }
-  ]
-}
-[/AI_ACTIONS]`;
+    const safeObjects = Array.isArray(objects) ? objects : [];
+    const safeProfile = userProfile || {};
+    const safeRoom = roomConfig || {};
+    const safeEvaluation = ruleEngineResult || { overallScore: 0, statusText: 'Chưa có đánh giá', keyIssues: [], items: [] };
+    const customKey = (req.headers['x-gemini-api-key'] as string | undefined) || apiKey;
+    const aiClient = getGenAIClient(customKey);
+    const latestUserMessage = String(messages[messages.length - 1].content).trim();
+    if (!latestUserMessage) {
+      return res.status(400).json({ success: false, error: 'Vui lòng nhập nội dung câu hỏi.' });
+    }
 
+    if (aiClient) {
+      try {
+        const selectedObject = safeObjects.find((o: any) => o.id === selectedObjectId);
+
+        // Context snapshot injected as the very first turn so Gemini always knows the room state
+        const contextHeader = `BỐI CẢNH PHÒNG NGỦ 3D HIỆN TẠI (cập nhật thời gian thực):
+- Gia chủ: Sinh năm ${safeProfile.birthYear} (${safeProfile.gender === 'male' ? 'Nam' : 'Nữ'}), Quái ${safeProfile.guaName} (${safeProfile.element}), ${safeProfile.group}.
+- Hướng cát (tốt): ${safeProfile.auspiciousDirections?.join(', ') || 'N/A'}.
+- Hướng hung (xấu): ${safeProfile.inauspiciousDirections?.join(', ') || 'N/A'}.
+- Kích thước phòng: ${safeRoom.width}m × ${safeRoom.length}m × ${safeRoom.height}m cao.
+- Hướng phòng: ${safeRoom.direction}.
+- Điểm phong thủy hiện tại: ${safeEvaluation.overallScore}/100 (${safeEvaluation.statusText}).
+- Đang chọn đồ vật: ${selectedObject ? `${selectedObject.name} (id: ${selectedObject.id}) tại [x=${selectedObject.position.x.toFixed(2)}, z=${selectedObject.position.z.toFixed(2)}], góc xoay: ${Math.round((selectedObject.rotation.y * 180) / Math.PI)}°` : 'Chưa chọn đồ vật nào'}.
+- Danh sách ${safeObjects.length} đồ vật hiện tại trong phòng:
+${safeObjects.map((o: any, idx: number) => `  ${idx + 1}. [id: "${o.id}"] ${o.name} (loại: ${o.type}): vị trí [x=${o.position.x.toFixed(2)}m, z=${o.position.z.toFixed(2)}m], kích thước [${o.dimensions.width}m × ${o.dimensions.length}m × ${o.dimensions.height}m], góc xoay: ${Math.round((o.rotation.y * 180) / Math.PI)}°`).join('\n')}
+- Cảnh báo xung sát: ${safeEvaluation.keyIssues?.join('; ') || 'Không có xung sát nghiêm trọng'}.`;
+
+        // Build full multi-turn conversation for Gemini
+        const historyTurns = messages.slice(0, -1);
         const formattedContents = [
           { role: 'user', parts: [{ text: contextHeader }] },
-          { role: 'model', parts: [{ text: 'Đã sẵn sàng. Tôi có thể hiểu câu lệnh thiết kế và phân tích phong thủy Bát Trạch để điều khiển mô hình 3D trực tiếp.' }] },
-          ...messages.map((m: any) => ({
+          { role: 'model', parts: [{ text: `Đã cập nhật bối cảnh phòng. Tôi thấy phòng có ${safeObjects.length} đồ vật, điểm phong thủy ${safeEvaluation.overallScore}/100. Tôi sẵn sàng trò chuyện, giải đáp mọi câu hỏi và điều khiển mô hình 3D theo yêu cầu của gia chủ.` }] },
+          ...historyTurns.map((m: any) => ({
             role: m.role === 'user' ? 'user' : 'model',
             parts: [{ text: m.content }],
           })),
+          { role: 'user', parts: [{ text: latestUserMessage }] },
         ];
 
-        const response = await ai.models.generateContent({
+        const response = await aiClient.models.generateContent({
           model: 'gemini-3.8-flash',
           contents: formattedContents,
           config: {
             systemInstruction: FENG_SHUI_SYSTEM_PROMPT,
+            tools: GEMINI_TOOLS as any,
             temperature: 0.7,
           },
         });
@@ -534,8 +649,70 @@ Khi có bất kỳ hành động điều chỉnh hoặc thêm mới hoặc tối
         let optimizationProposal = null;
         let cleanedReply = replyText;
 
+        // 1. Process Official Gemini Function Calls
+        const functionCalls = (response as any).functionCalls || [];
+        if (Array.isArray(functionCalls) && functionCalls.length > 0) {
+          const parsedActions: any[] = [];
+          for (const call of functionCalls) {
+            const fnName = call.name;
+            const args: any = call.args || {};
+
+            if (fnName === 'move_furniture') {
+              parsedActions.push({
+                type: 'move_object',
+                objectId: args.objectId,
+                position: args.targetX !== undefined && args.targetZ !== undefined ? { x: args.targetX, z: args.targetZ } : undefined,
+                description: args.reason || `Di chuyển ${args.objectId}`,
+              });
+            } else if (fnName === 'rotate_furniture') {
+              parsedActions.push({
+                type: 'rotate_object',
+                objectId: args.objectId,
+                rotationDelta: args.angleDegrees ? (args.angleDegrees * Math.PI) / 180 : Math.PI / 2,
+                description: args.reason || `Xoay ${args.objectId} ${args.angleDegrees || 90}°`,
+              });
+            } else if (fnName === 'add_furniture') {
+              parsedActions.push({
+                type: 'add_object',
+                objectType: args.objectType,
+                name: args.name,
+                position: args.targetX !== undefined && args.targetZ !== undefined ? { x: args.targetX, z: args.targetZ } : undefined,
+                description: args.reason || `Thêm ${args.name || args.objectType}`,
+              });
+            } else if (fnName === 'delete_furniture') {
+              parsedActions.push({
+                type: 'delete_object',
+                objectId: args.objectId,
+                description: args.reason || `Xóa đồ vật ${args.objectId}`,
+              });
+            } else if (fnName === 'optimize_room_layout') {
+              const { proposal } = generateOptimizedLayout(safeProfile, safeRoom, safeObjects, safeEvaluation);
+              optimizationProposal = proposal;
+              proposedAdjustment = proposal.adjustments[0] || null;
+              parsedActions.push({
+                type: 'optimize_room',
+                description: args.reason || 'Tối ưu toàn bộ bố cục phòng ngủ theo Bát Trạch',
+                adjustments: proposal.adjustments,
+              });
+            } else if (fnName === 'undo_last_action') {
+              parsedActions.push({
+                type: 'undo_action',
+                description: args.reason || 'Hoàn tác thao tác trước',
+              });
+            }
+          }
+
+          if (parsedActions.length > 0) {
+            aiActions = {
+              actions: parsedActions,
+              ...(optimizationProposal ? { optimizationProposal } : {}),
+            };
+          }
+        }
+
+        // 2. Secondary Regex Fallback (in case Gemini formats JSON in text blocks)
         const actionMatch = replyText.match(/\[AI_ACTIONS\]([\s\S]*?)\[\/AI_ACTIONS\]/);
-        if (actionMatch) {
+        if (actionMatch && !aiActions) {
           try {
             aiActions = JSON.parse(actionMatch[1].trim());
             cleanedReply = cleanedReply.replace(/\[AI_ACTIONS\][\s\S]*?\[\/AI_ACTIONS\]/, '').trim();
@@ -551,7 +728,7 @@ Khi có bất kỳ hành động điều chỉnh hoặc thêm mới hoặc tối
         }
 
         const match = replyText.match(/\[PROPOSED_LAYOUT\]([\s\S]*?)\[\/PROPOSED_LAYOUT\]/);
-        if (match) {
+        if (match && !proposedAdjustment) {
           try {
             proposedAdjustment = JSON.parse(match[1].trim());
             cleanedReply = cleanedReply.replace(/\[PROPOSED_LAYOUT\][\s\S]*?\[\/PROPOSED_LAYOUT\]/, '').trim();
@@ -560,12 +737,19 @@ Khi có bất kỳ hành động điều chỉnh hoặc thêm mới hoặc tối
           }
         }
 
+        // If Gemini made function calls but returned empty text, generate a clear polite summary
+        if (!cleanedReply && aiActions?.actions?.length) {
+          const actionSummary = aiActions.actions.map((a: any) => `• ${a.description}`).join('\n');
+          cleanedReply = `Tôi đã thực thi các điều chỉnh theo yêu cầu của bạn:\n${actionSummary}\n\nMô hình 3D đã được cập nhật an toàn.`;
+        }
+
         return res.json({
           success: true,
-          reply: cleanedReply,
+          reply: cleanedReply || 'Đã phân tích yêu cầu của bạn.',
           aiActions,
           proposedAdjustment,
           optimizationProposal,
+          isGeminiOnline: true,
         });
       } catch (geminiError: any) {
         console.warn('Gemini chat call failed, using intelligent local chat parser:', geminiError.message);
@@ -573,10 +757,11 @@ Khi có bất kỳ hành động điều chỉnh hoặc thêm mới hoặc tối
     }
 
     // Fallback: Intelligent Local Natural Language Chat & 3D Commander
-    const localChatResult = handleLocalAIChat(latestUserMessage, userProfile, roomConfig, objects, ruleEngineResult, selectedObjectId);
+    const localChatResult = handleLocalAIChat(latestUserMessage, safeProfile, safeRoom, safeObjects, safeEvaluation, selectedObjectId);
     return res.json({
       success: true,
       ...localChatResult,
+      isGeminiOnline: false,
     });
   } catch (error: any) {
     console.error('Error in chat:', error);
@@ -603,6 +788,7 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
+  const hasApiKey = Boolean(process.env.GEMINI_API_KEY && !process.env.GEMINI_API_KEY.includes('MY_GEMINI_API_KEY'));
   app.listen(port, () => {
     console.log(`Feng Shui 3D Studio Server running on port ${port} (API Key: ${hasApiKey ? 'Configured' : 'Offline AI Engine Active'})`);
   });

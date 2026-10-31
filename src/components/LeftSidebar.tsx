@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { UserFengShuiProfile } from '../types/fengshui';
+import { DIRECTION_NAMES_VI } from '../engine/batTrach';
 
 interface LeftSidebarProps {
   userProfile: UserFengShuiProfile;
@@ -15,21 +16,17 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 }) => {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
 
-  // Auspicious directions based on userProfile
-  const auspiciousList = [
-    { name: 'Tây Bắc', desc: 'Sinh khí' },
-    { name: 'Tây Nam', desc: 'Thiên y' },
-    { name: 'Đông Bắc', desc: 'Diên niên' },
-    { name: 'Tây', desc: 'Phục vị' },
-  ];
+  // Dynamic auspicious directions based on userProfile
+  const auspiciousList = userProfile.auspiciousDirections.map((dir) => ({
+    name: DIRECTION_NAMES_VI[dir] || dir,
+    desc: userProfile.directionDetails[dir]?.name || 'Cát lợi',
+  }));
 
-  // Inauspicious directions based on userProfile
-  const inauspiciousList = [
-    { name: 'Đông', desc: 'Tuyệt mệnh' },
-    { name: 'Nam', desc: 'Ngũ quỷ' },
-    { name: 'Đông Nam', desc: 'Lục sát' },
-    { name: 'Bắc', desc: 'Họa hại' },
-  ];
+  // Dynamic inauspicious directions based on userProfile
+  const inauspiciousList = userProfile.inauspiciousDirections.map((dir) => ({
+    name: DIRECTION_NAMES_VI[dir] || dir,
+    desc: userProfile.directionDetails[dir]?.name || 'Hung hiểm',
+  }));
 
   return (
     <aside className="w-[280px] bg-[#16191B]/95 backdrop-blur-md rounded-2xl shadow-2xl border border-stone-800/80 p-3.5 flex flex-col gap-2.5 select-none text-white pointer-events-auto transition-all duration-200">
@@ -120,7 +117,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 </svg>
                 <span className="text-[11px]">Ngũ hành</span>
               </div>
-              <span className="font-bold text-white text-xs">Thổ</span>
+              <span className="font-bold text-white text-xs">{userProfile.element}</span>
             </div>
 
             {/* Row 4: Cung phi */}

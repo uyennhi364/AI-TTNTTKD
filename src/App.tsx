@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Gender,
   RoomConfig,
@@ -70,6 +70,60 @@ export default function App() {
   const [aiReportData, setAiReportData] = useState<any>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // 6. History Stack for Undo / Redo
+  const [historyPast, setHistoryPast] = useState<RoomObject[][]>([]);
+  const [historyFuture, setHistoryFuture] = useState<RoomObject[][]>([]);
+
+  const pushSnapshot = (current: RoomObject[]) => {
+    setHistoryPast((prev) => [...prev.slice(-19), current]);
+    setHistoryFuture([]);
+  };
+
+  const handleUndo = () => {
+    if (historyPast.length === 0) {
+      showToast('Không có thao tác nào để hoàn tác.');
+      return;
+    }
+    const previous = historyPast[historyPast.length - 1];
+    setHistoryPast((prev) => prev.slice(0, -1));
+    setHistoryFuture((prev) => [objects, ...prev]);
+    setObjects(previous);
+    showToast('↶ Đã hoàn tác thao tác trước đó.');
+  };
+
+  const handleRedo = () => {
+    if (historyFuture.length === 0) {
+      showToast('Không có thao tác nào để làm lại.');
+      return;
+    }
+    const next = historyFuture[0];
+    setHistoryFuture((prev) => prev.slice(1));
+    setHistoryPast((prev) => [...prev, objects]);
+    setObjects(next);
+    showToast('↷ Đã làm lại thao tác.');
+  };
+
+  // Keyboard shortcut for Undo (Ctrl+Z) and Redo (Ctrl+Y / Ctrl+Shift+Z)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') {
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        handleUndo();
+      } else if (
+        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z')
+      ) {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [historyPast, historyFuture, objects]);
+
   // Calculate Real-Time Feng Shui Evaluation
   const evaluation = useMemo(() => {
     return evaluateRoomFengShui(userProfile, roomConfig, objects);
@@ -115,6 +169,7 @@ export default function App() {
 
   // Handler: Delete Object
   const handleDeleteObject = (id: string) => {
+    pushSnapshot(objects);
     setObjects((prev) => prev.filter((obj) => obj.id !== id));
     if (selectedObjectId === id) {
       setSelectedObjectId(null);
@@ -127,6 +182,7 @@ export default function App() {
     const target = objects.find((o) => o.id === id);
     if (!target) return;
 
+    pushSnapshot(objects);
     const newObj: RoomObject = {
       ...target,
       id: `${target.type}_${Date.now()}`,
@@ -148,6 +204,7 @@ export default function App() {
     name: string;
     dimensions: { width: number; length: number; height: number };
   }) => {
+    pushSnapshot(objects);
     const newId = `${item.type}_${Date.now()}`;
     const newObj: RoomObject = {
       id: newId,
@@ -165,6 +222,7 @@ export default function App() {
 
   // Handler: Drop from library to coordinates
   const handleDropFromLibrary = (item: any, clientX: number, clientY: number) => {
+    pushSnapshot(objects);
     const normX = (clientX / window.innerWidth - 0.5) * roomConfig.width * 0.7;
     const normZ = (clientY / window.innerHeight - 0.5) * roomConfig.length * 0.7;
 
@@ -185,6 +243,12 @@ export default function App() {
 
   // Handler: Execute AI Action Command
   const handleExecuteAIAction = (rawAction: any) => {
+    // Check if AI requested undo
+    if (rawAction?.type === 'undo_action' || rawAction?.action === 'undo_action') {
+      handleUndo();
+      return;
+    }
+
     const validation = validateAICommand(rawAction, roomConfig, objects);
     if (!validation.valid || !validation.sanitizedCommand) {
       showToast(`⚠ Lệnh AI không hợp lệ: ${validation.error || 'Dữ liệu sai định dạng'}`);
@@ -192,6 +256,9 @@ export default function App() {
     }
 
     const action = validation.sanitizedCommand;
+
+    // Save snapshot before executing state-changing action
+    pushSnapshot(objects);
 
     if (action.type === 'add_object') {
       const matchedLib = LIBRARY_ITEMS.find((it) => it.type === action.objectType);
@@ -257,6 +324,7 @@ export default function App() {
 
   // Handler: Apply Proposal
   const handleApplyProposal = (adj: ProposedAdjustment) => {
+    pushSnapshot(objects);
     const objName = objects.find((o) => o.id === adj.objectId)?.name || 'đồ vật';
     setObjects((prev) =>
       prev.map((o) => {
@@ -277,6 +345,7 @@ export default function App() {
 
   // Handler: Apply Multiple Adjustments
   const handleApplyMultipleAdjustments = (adjs: ProposedAdjustment[]) => {
+    pushSnapshot(objects);
     setObjects((prev) => {
       let updated = [...prev];
       adjs.forEach((adj) => {
@@ -396,6 +465,32 @@ export default function App() {
               <path d="m12 3-8 4.5v9L12 21l8-4.5v-9L12 3Z" />
             </svg>
             <span>Isometric</span>
+          </button>
+        </div>
+
+        {/* Undo / Redo Actions */}
+        <div className="flex items-center p-1 bg-[#1E2124] rounded-xl border border-stone-800 text-xs gap-0.5">
+          <button
+            onClick={handleUndo}
+            disabled={historyPast.length === 0}
+            className="p-1.5 rounded-lg text-stone-300 hover:text-white hover:bg-stone-800 disabled:opacity-30 disabled:pointer-events-none transition-all"
+            title="Hoàn tác (Ctrl+Z)"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path d="M3 7v6h6" />
+              <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+            </svg>
+          </button>
+          <button
+            onClick={handleRedo}
+            disabled={historyFuture.length === 0}
+            className="p-1.5 rounded-lg text-stone-300 hover:text-white hover:bg-stone-800 disabled:opacity-30 disabled:pointer-events-none transition-all"
+            title="Làm lại (Ctrl+Y)"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path d="M21 7v6h-6" />
+              <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7" />
+            </svg>
           </button>
         </div>
 

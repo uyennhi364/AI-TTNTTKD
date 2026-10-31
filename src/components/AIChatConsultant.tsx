@@ -8,7 +8,7 @@ import {
   RoomObject,
   UserFengShuiProfile,
 } from '../types/fengshui';
-import { generateFengShuiConsultation } from '../engine/geminiFengShuiAI';
+import { generateFengShuiConsultation, ChatHistoryMessage } from '../engine/geminiFengShuiAI';
 import { parseIntent, buildSceneState } from '../engine/sceneIntentParser';
 import { executeSceneCommand } from '../engine/sceneCommandExecutor';
 import { SceneCommand, ClarifyCommand, AIIntentResult } from '../engine/sceneCommandTypes';
@@ -76,7 +76,31 @@ export const AIChatConsultant: React.FC<AIChatConsultantProps> = ({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isGeminiOnline, setIsGeminiOnline] = useState<boolean>(false);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
+  const [apiKeyInput, setApiKeyInput] = useState<string>(() =>
+    typeof window !== 'undefined' ? localStorage.getItem('gemini_api_key') || '' : ''
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Check Gemini online status on mount
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const savedKey = localStorage.getItem('gemini_api_key') || '';
+        const headers: Record<string, string> = {};
+        if (savedKey) headers['x-gemini-api-key'] = savedKey;
+        const res = await fetch('/api/gemini/status', { headers });
+        if (res.ok) {
+          const data = await res.json();
+          setIsGeminiOnline(Boolean(data.isOnline));
+        }
+      } catch {
+        setIsGeminiOnline(false);
+      }
+    };
+    checkStatus();
+  }, []);
 
   // Auto scroll to bottom
   useEffect(() => {
@@ -110,14 +134,25 @@ export const AIChatConsultant: React.FC<AIChatConsultantProps> = ({
     setIsLoading(true);
 
     try {
+      // Build conversation history (excluding the message we just added)
+      const chatHistory: ChatHistoryMessage[] = messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+
       const response = await generateFengShuiConsultation(
         promptText,
         userProfile,
         roomConfig,
         objects,
         evaluation,
-        selectedObjectId
+        selectedObjectId,
+        chatHistory
       );
+
+      if (response.isGeminiOnline !== undefined) {
+        setIsGeminiOnline(response.isGeminiOnline);
+      }
 
       let executedSummary = undefined;
       if (response.actions && response.actions.length > 0) {
@@ -192,6 +227,27 @@ export const AIChatConsultant: React.FC<AIChatConsultantProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {/* Gemini AI Status Badge & Key Button */}
+          {isGeminiOnline ? (
+            <button
+              onClick={() => setIsApiKeyModalOpen(true)}
+              className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-300 text-emerald-800 text-[10px] font-bold flex items-center gap-1 hover:bg-emerald-100 transition-colors shadow-2xs"
+              title="Gemini 3.8 Flash đang online và sẵn sàng trò chuyện tự do. Nhấn để xem/đổi API Key."
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Gemini 3.8</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => setIsApiKeyModalOpen(true)}
+              className="px-2 py-0.5 rounded-full bg-amber-50 border border-amber-300 text-amber-800 text-[10px] font-bold flex items-center gap-1 hover:bg-amber-100 transition-colors shadow-2xs"
+              title="Chưa kích hoạt Gemini (đang chạy Offline). Nhấn để nhập API Key và mở khóa trò chuyện tự do!"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              <span>Offline</span>
+            </button>
+          )}
+
           <div className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold">
             Live 3D
           </div>
@@ -246,10 +302,11 @@ export const AIChatConsultant: React.FC<AIChatConsultantProps> = ({
                 Gợi ý câu lệnh mẫu
               </p>
               {[
+                'Hiển thị tất cả đồ vật trong phòng',
+                'Điểm phong thủy hiện tại là bao nhiêu?',
                 'Tối ưu phòng ngủ cho tôi',
-                'Thêm bàn học ở góc trái',
-                'Xoay giường 90 độ',
                 'Tại sao nên xoay giường?',
+                'Thêm bàn học ở góc trái',
                 'Di chuyển gương ra khỏi vị trí đối diện giường',
               ].map((text, idx) => (
                 <button
@@ -401,7 +458,7 @@ export const AIChatConsultant: React.FC<AIChatConsultantProps> = ({
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Nhập yêu cầu: di chuyển, xoay, thêm đồ hoặc tối ưu..."
+            placeholder="Hỏi bất cứ gì về phòng ngủ, phong thủy, nội thất..."
             disabled={isLoading}
             className="w-full pl-3.5 pr-10 py-2.5 border border-stone-200 rounded-2xl text-xs focus:outline-none focus:ring-1.5 focus:ring-[#00705a] bg-stone-50/60 disabled:opacity-50"
           />
@@ -430,6 +487,97 @@ export const AIChatConsultant: React.FC<AIChatConsultantProps> = ({
           </button>
         </div>
       </div>
+
+      {/* 5. API KEY CONFIGURATION MODAL */}
+      {isApiKeyModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl border border-stone-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">✨</span>
+                <div>
+                  <h4 className="text-sm font-bold text-stone-900">Kích hoạt Gemini AI</h4>
+                  <p className="text-[11px] text-stone-500">Mở khóa trò chuyện tự do đa năng</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsApiKeyModalOpen(false)}
+                className="w-7 h-7 rounded-full flex items-center justify-center text-stone-400 hover:bg-stone-100 hover:text-stone-700 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-2 text-xs text-stone-600">
+              <p>
+                Nhập <strong>Google Gemini API Key</strong> để kích hoạt model <strong>Gemini 3.8 Flash</strong>. Khi có API Key, bạn có thể trò chuyện tự do, hỏi bất kỳ điều gì về phong thủy, nội thất và đồ vật trong phòng.
+              </p>
+              <div className="p-2.5 rounded-xl bg-purple-50/70 border border-purple-200/80 text-[11px] text-purple-900">
+                💡 <strong>Chưa có key?</strong> Bạn có thể lấy miễn phí tại{' '}
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline font-bold text-purple-700 hover:text-purple-900"
+                >
+                  Google AI Studio
+                </a>.
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-stone-700">Gemini API Key</label>
+              <input
+                type="password"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full px-3 py-2 rounded-xl border border-stone-300 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={() => {
+                  localStorage.removeItem('gemini_api_key');
+                  setApiKeyInput('');
+                  setIsGeminiOnline(false);
+                  setIsApiKeyModalOpen(false);
+                }}
+                className="px-3 py-2 rounded-xl border border-stone-200 text-stone-600 hover:bg-stone-100 text-xs font-semibold"
+              >
+                Xóa Key
+              </button>
+              <button
+                onClick={async () => {
+                  const trimmed = apiKeyInput.trim();
+                  if (trimmed) {
+                    localStorage.setItem('gemini_api_key', trimmed);
+                  } else {
+                    localStorage.removeItem('gemini_api_key');
+                  }
+                  // Verify status with server
+                  try {
+                    const res = await fetch('/api/gemini/status', {
+                      headers: trimmed ? { 'x-gemini-api-key': trimmed } : {},
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      setIsGeminiOnline(Boolean(data.isOnline));
+                    }
+                  } catch {
+                    setIsGeminiOnline(Boolean(trimmed));
+                  }
+                  setIsApiKeyModalOpen(false);
+                }}
+                className="flex-1 py-2 px-3 rounded-xl bg-[#00705a] hover:bg-[#005c4a] text-white text-xs font-bold transition-all shadow-sm active:scale-95 text-center"
+              >
+                Lưu & Kích hoạt
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 };
